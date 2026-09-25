@@ -539,3 +539,311 @@ def render_scan_diff_table(console: Console, diff_data: Dict[str, List[Any]]) ->
 
     console.print(table)
 
+
+def render_attack_surface_graph(console: Console, graph: Any) -> None:
+    """Display the Attack Surface Graph topology and summary."""
+    summary = graph.summary()
+    node_counts = summary.get("node_counts", {})
+
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan", justify="right")
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan", justify="right")
+
+    grid.add_row("Total Graph Nodes", str(summary.get("total_nodes", 0)), "Total Graph Edges", str(summary.get("total_edges", 0)))
+    grid.add_row("Hosts / Subdomains", str(node_counts.get("HOST", 0)), "API Routes", str(summary.get("api_routes", 0)))
+    grid.add_row("Endpoints Mapped", str(node_counts.get("ENDPOINT", 0)), "High-Value Targets", str(summary.get("high_value_endpoints", 0)))
+    grid.add_row("Parameters Mapped", str(node_counts.get("PARAMETER", 0)), "Auth Boundaries", str(node_counts.get("AUTH_BOUNDARY", 0)))
+    grid.add_row("JavaScript Assets", str(node_counts.get("JAVASCRIPT", 0)), "Findings Attached", str(node_counts.get("FINDING", 0)))
+
+    panel = Panel(
+        grid,
+        title="[bold cyan]ATTACK SURFACE GRAPH TOPOLOGY[/bold cyan]",
+        border_style="cyan",
+        padding=(1, 2),
+    )
+    console.print(panel)
+    console.print()
+
+    tree_str = graph.render_ascii_tree()
+    console.print("[bold cyan]GRAPH HIERARCHY TREE[/bold cyan]")
+    console.print(Panel(tree_str, border_style="dim", padding=(1, 2)))
+    console.print()
+
+
+def render_regression_report(console: Console, report: Any) -> None:
+    """Display complete structured security regression analysis between two scans."""
+    summary = report.summary()
+
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan", justify="right")
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan", justify="right")
+
+    grid.add_row("Baseline Scan ID", str(report.baseline_scan_id)[:14], "Candidate Scan ID", str(report.current_scan_id)[:14])
+    grid.add_row("New Findings", f"[green]{summary['new']}[/green]", "Resolved Findings", f"[cyan]{summary['resolved']}[/cyan]")
+    grid.add_row("Regressed / Reopened", f"[bold red]{summary['regressed']}[/bold red]" if summary['regressed'] > 0 else "[dim]0[/dim]", "Unchanged Findings", str(summary['unchanged']))
+    grid.add_row("New Endpoints Discovered", str(summary['new_endpoints_count']), "Blocking Regressions", "[bold red]YES[/bold red]" if summary['blocking'] else "[green]NO[/green]")
+
+    panel = Panel(
+        grid,
+        title="[bold cyan]SECURITY REGRESSION & DELTA ANALYSIS[/bold cyan]",
+        border_style="cyan",
+        padding=(1, 2),
+    )
+    console.print(panel)
+    console.print()
+
+    table = Table(title="[bold cyan]ITEMIZED FINDING DELTAS[/bold cyan]", border_style="dim")
+    table.add_column("Status", width=14)
+    table.add_column("Severity", width=10)
+    table.add_column("Title", style="bold white")
+    table.add_column("Endpoint", style="dim")
+    table.add_column("Comparative Analysis", style="yellow")
+
+    for item in report.finding_regressions:
+        status_str = item.status.value
+        if status_str in ("REGRESSED", "REOPENED"):
+            status_colored = f"[bold red]{status_str}[/bold red]"
+        elif status_str == "NEW":
+            status_colored = f"[bold green]{status_str}[/bold green]"
+        elif status_str == "RESOLVED":
+            status_colored = f"[bold cyan]{status_str}[/bold cyan]"
+        else:
+            status_colored = f"[dim]{status_str}[/dim]"
+
+        sev_colored = f"[bold red]{item.severity}[/bold red]" if item.severity in ("CRITICAL", "HIGH") else item.severity
+        table.add_row(
+            status_colored,
+            sev_colored,
+            item.title[:35],
+            item.endpoint_url[:40],
+            item.explanation,
+        )
+
+    console.print(table)
+    console.print()
+
+
+def render_api_analysis_table(console: Console, analysis: Any) -> None:
+    """Display API discovery and security analysis summary."""
+    spec = analysis.spec
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan")
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan")
+
+    grid.add_row("API Architecture", analysis.api_type.value, "Spec Title", spec.title if spec else "None")
+    grid.add_row("Documented Routes", str(analysis.documented_endpoints_count), "Discovered Routes", str(analysis.discovered_endpoints_count))
+    grid.add_row("Undocumented Endpoints", f"[bold red]{len(analysis.undocumented_endpoints)}[/bold red]" if analysis.undocumented_endpoints else "[green]0[/green]", "Dangerous Methods", f"[yellow]{len(analysis.potentially_dangerous_methods)}[/yellow]" if analysis.potentially_dangerous_methods else "[green]0[/green]")
+
+    panel = Panel(
+        grid,
+        title="[bold cyan]API ATTACK SURFACE & SECURITY ASSESSMENT[/bold cyan]",
+        border_style="cyan",
+        padding=(1, 2),
+    )
+    console.print(panel)
+    console.print()
+
+    if analysis.undocumented_endpoints:
+        table_undoc = Table(title="[bold red]SHADOW / UNDOCUMENTED API ENDPOINTS[/bold red]", border_style="red")
+        table_undoc.add_column("Discovered Route", style="bold white")
+        table_undoc.add_column("Status", style="bold red")
+        for ep_str in analysis.undocumented_endpoints[:15]:
+            table_undoc.add_row(ep_str, "MISSING FROM SPEC")
+        console.print(table_undoc)
+        console.print()
+
+    if analysis.potentially_dangerous_methods:
+        table_dang = Table(title="[bold yellow]POTENTIALLY DANGEROUS / UNAUTHENTICATED METHODS[/bold yellow]", border_style="yellow")
+        table_dang.add_column("Route & Method", style="bold white")
+        for m in analysis.potentially_dangerous_methods[:15]:
+            table_dang.add_row(m)
+        console.print(table_dang)
+        console.print()
+
+
+def render_graphql_analysis_table(console: Console, analysis: Any) -> None:
+    """Display GraphQL security and introspection analysis results."""
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan")
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan")
+
+    grid.add_row("GraphQL Endpoint", analysis.endpoint_url, "Introspection", "[bold red]ENABLED[/bold red]" if analysis.introspection_enabled else "[green]DISABLED[/green]")
+    grid.add_row("Root Query Type", analysis.query_type_name or "None", "Exposed Queries", str(analysis.queries_count))
+    grid.add_row("Root Mutation Type", analysis.mutation_type_name or "None", "Exposed Mutations", str(analysis.mutations_count))
+    grid.add_row("Field Suggestions", "[yellow]ENABLED[/yellow]" if analysis.suggestions_enabled else "[green]DISABLED[/green]", "Sensitive Fields", f"[bold red]{len(analysis.sensitive_fields)}[/bold red]" if analysis.sensitive_fields else "[green]0[/green]")
+
+    panel = Panel(
+        grid,
+        title="[bold cyan]GRAPHQL SECURITY & INTROSPECTION AUDIT[/bold cyan]",
+        border_style="cyan",
+        padding=(1, 2),
+    )
+    console.print(panel)
+    console.print()
+
+    if analysis.sensitive_fields:
+        table_sens = Table(title="[bold red]POTENTIALLY SENSITIVE SCHEMA FIELDS[/bold red]", border_style="red")
+        table_sens.add_column("Type & Field", style="bold white")
+        for f in analysis.sensitive_fields[:20]:
+            table_sens.add_row(f)
+        console.print(table_sens)
+        console.print()
+
+
+def render_jwt_analysis_table(console: Console, analysis: Any) -> None:
+    """Display JWT token decoding and security vulnerability analysis."""
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan")
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan")
+
+    alg_colored = f"[bold red]{analysis.algorithm}[/bold red]" if analysis.is_none_algorithm else f"[green]{analysis.algorithm}[/green]"
+    exp_status = "[bold red]EXPIRED[/bold red]" if analysis.is_expired else "[green]VALID[/green]" if analysis.is_expired is False else "[yellow]NONE (NEVER EXPIRES)[/yellow]"
+
+    grid.add_row("Algorithm (alg)", alg_colored, "Token Structure", "[green]VALID RFC 7519[/green]" if analysis.is_valid_structure else "[red]MALFORMED[/red]")
+    grid.add_row("Key ID (kid)", analysis.key_id or "None", "Expiration Status", exp_status)
+    grid.add_row("Issued At (iat)", analysis.issued_at or "-", "Expires At (exp)", analysis.expires_at or "-")
+    grid.add_row("Sensitive Claims Exposed", f"[bold red]{len(analysis.sensitive_claims_exposed)}[/bold red]" if analysis.sensitive_claims_exposed else "[green]0[/green]", "Identified Weaknesses", f"[yellow]{len(analysis.weaknesses)}[/yellow]" if analysis.weaknesses else "[green]0[/green]")
+
+    panel = Panel(
+        grid,
+        title="[bold cyan]JSON WEB TOKEN (JWT) SECURITY ANALYSIS[/bold cyan]",
+        border_style="cyan",
+        padding=(1, 2),
+    )
+    console.print(panel)
+    console.print()
+
+    if analysis.header:
+        console.print("[bold cyan]JOSE Header:[/bold cyan]")
+        console.print(Panel(str(analysis.header), border_style="dim"))
+        console.print()
+
+    if analysis.claims:
+        console.print("[bold cyan]Decoded Claims Payload (Secrets Redacted):[/bold cyan]")
+        console.print(Panel(str(analysis.claims), border_style="dim"))
+        console.print()
+
+    if analysis.weaknesses:
+        table_weak = Table(title="[bold yellow]IDENTIFIED TOKEN WEAKNESSES[/bold yellow]", border_style="yellow")
+        table_weak.add_column("Weakness / Anomaly", style="bold white")
+        for w in analysis.weaknesses:
+            table_weak.add_row(w)
+        console.print(table_weak)
+        console.print()
+
+
+def render_websocket_analysis_table(console: Console, analysis: Any) -> None:
+    """Display WebSocket handshake and CSWSH security audit results."""
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan")
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan")
+
+    upgrade_str = "[bold green]101 SWITCHING PROTOCOLS[/bold green]" if analysis.is_upgrade_supported else f"[dim]HTTP {analysis.status_code}[/dim]"
+    cswsh_str = "[bold red]ARBITRARY ORIGIN ACCEPTED (CSWSH RISK)[/bold red]" if analysis.allows_arbitrary_origin else "[green]ORIGIN VALIDATED / REJECTED[/green]"
+    transport_str = "[bold red]UNENCRYPTED (ws:// or http://)[/bold red]" if analysis.is_unencrypted else "[green]TLS ENCRYPTED (wss://)[/green]"
+
+    grid.add_row("Endpoint URL", analysis.endpoint_url, "Upgrade Handshake", upgrade_str)
+    grid.add_row("Transport Security", transport_str, "Origin Validation", cswsh_str)
+    grid.add_row("Requires Auth", "[cyan]YES[/cyan]" if analysis.requires_authentication else "[dim]NO[/dim]", "Subprotocols", ", ".join(analysis.subprotocols_supported) if analysis.subprotocols_supported else "None")
+
+    panel = Panel(
+        grid,
+        title="[bold cyan]WEBSOCKET PROTOCOL & CSWSH AUDIT[/bold cyan]",
+        border_style="cyan",
+        padding=(1, 2),
+    )
+    console.print(panel)
+    console.print()
+
+
+def render_fuzz_results_table(console: Console, summary: Any) -> None:
+    """Display controlled fuzzing campaign summary and discovered routes."""
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan")
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan")
+
+    dist_str = ", ".join(f"{st}: {ct}" for st, ct in summary.status_distribution.items())
+    grid.add_row("Target Base URL", summary.target_base_url, "Total Probes Sent", str(summary.total_requests_sent))
+    grid.add_row("Discovered Routes", f"[bold green]{summary.discovered_endpoints_count}[/bold green]", "Status Distribution", dist_str or "None")
+
+    panel = Panel(
+        grid,
+        title="[bold cyan]CONTROLLED FUZZING CAMPAIGN SUMMARY[/bold cyan]",
+        border_style="cyan",
+        padding=(1, 2),
+    )
+    console.print(panel)
+    console.print()
+
+    if summary.results:
+        table = Table(title="[bold cyan]DISCOVERED ENDPOINTS & ANOMALIES[/bold cyan]", border_style="dim")
+        table.add_column("Status", width=8)
+        table.add_column("Payload / Route", style="bold white")
+        table.add_column("Size", justify="right", width=10)
+        table.add_column("Latency", justify="right", width=10)
+        table.add_column("Observation Note", style="yellow")
+
+        for r in summary.results[:25]:
+            status_color = "green" if r.status_code == 200 else "cyan" if 300 <= r.status_code < 400 else "yellow" if r.status_code in (401, 403) else "red"
+            table.add_row(
+                f"[{status_color}]{r.status_code}[/{status_color}]",
+                r.payload,
+                f"{r.response_size} B",
+                f"{r.elapsed_ms:.1f} ms",
+                r.note,
+            )
+        console.print(table)
+        console.print()
+
+
+def render_ci_policy_summary(
+    console: Console,
+    target: str,
+    total_findings: int,
+    blocking_findings: int,
+    is_passed: bool,
+    threshold: str,
+    regressions_count: int = 0,
+) -> None:
+    """Display CI/CD security gate policy pass/fail outcome banner."""
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan")
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan")
+
+    status_str = "[bold green]PASSED (NO BLOCKING VULNERABILITIES)[/bold green]" if is_passed else "[bold red]FAILED (POLICY THRESHOLD EXCEEDED)[/bold red]"
+    border_color = "green" if is_passed else "red"
+
+    grid.add_row("Target", target, "Policy Outcome", status_str)
+    grid.add_row("Fail-On Threshold", f"[yellow]{threshold.upper()}[/yellow]", "Total Findings", str(total_findings))
+    grid.add_row("Blocking Findings", f"[bold red]{blocking_findings}[/bold red]" if blocking_findings > 0 else "[green]0[/green]", "Regressions", f"[bold red]{regressions_count}[/bold red]" if regressions_count > 0 else "[green]0[/green]")
+
+    panel = Panel(
+        grid,
+        title=f"[bold {border_color}]VULNFORGE CI/CD SECURITY GATE[/bold {border_color}]",
+        border_style=border_color,
+        padding=(1, 2),
+    )
+    console.print(panel)
+    console.print()
+
+
+
+
+
+

@@ -1,5 +1,7 @@
 """Scan Context and Runtime Statistics."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -8,10 +10,10 @@ import uuid
 from vulnforge.core.config import VulnForgeConfig
 from vulnforge.core.rate_limiter import RateLimiter
 from vulnforge.core.scope import ScopeEngine
-from vulnforge.models.target import Target
 
 if TYPE_CHECKING:
     from vulnforge.core.engine import HttpEngine
+    from vulnforge.models.target import Target
 
 
 @dataclass

@@ -8,6 +8,14 @@ from vulnforge.correlation.confidence import (
 )
 from vulnforge.correlation.deduplicator import FindingDeduplicator
 from vulnforge.correlation.engine import CorrelationEngine
+from vulnforge.correlation.lifecycle import FindingLifecycleManager
+from vulnforge.correlation.regression import (
+    AttackSurfaceDelta,
+    FindingRegressionItem,
+    RegressionStatus,
+    SecurityRegressionEngine,
+    SecurityRegressionReport,
+)
 from vulnforge.correlation.severity import (
     AuthRequirement,
     DataExposureLevel,
@@ -18,6 +26,12 @@ from vulnforge.correlation.severity import (
 __all__ = [
     "CorrelationEngine",
     "FindingDeduplicator",
+    "FindingLifecycleManager",
+    "SecurityRegressionEngine",
+    "SecurityRegressionReport",
+    "RegressionStatus",
+    "FindingRegressionItem",
+    "AttackSurfaceDelta",
     "ConfidenceEngine",
     "ConfidenceLevel",
     "ConfidenceReport",

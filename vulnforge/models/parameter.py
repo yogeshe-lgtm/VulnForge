@@ -1,7 +1,7 @@
 """Parameter data model for discovered query, form, body, and path parameters."""
 
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -34,8 +34,27 @@ class Parameter(BaseModel):
     classification_confidence: int = Field(
         default=50, ge=0, le=100, description="Classification confidence percentage"
     )
+    classification_reasons: List[str] = Field(
+        default_factory=list, description="Reasons for parameter classification"
+    )
 
     @property
     def identifier(self) -> str:
         """Unique parameter signature for deduplication."""
         return f"{self.endpoint_url}::{self.location.value}::{self.name}"
+
+    @property
+    def is_high_interest(self) -> bool:
+        """Check if parameter represents a high-interest target for vulnerability testing."""
+        high_categories = {
+            "IDENTIFIER",
+            "URL_INPUT",
+            "REDIRECT",
+            "FILE_PATH",
+            "FILE_NAME",
+            "AUTHENTICATION",
+            "STATE_CHANGE",
+            "SESSION",
+        }
+        return self.classification.upper() in high_categories
+

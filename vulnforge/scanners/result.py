@@ -49,12 +49,16 @@ class FindingSeverity(str, Enum):
 
 
 class FindingStatus(str, Enum):
-    """Deterministic confirmation status for an assessment finding."""
+    """Deterministic confirmation and lifecycle status for an assessment finding."""
 
     OBSERVED = "OBSERVED"
     POTENTIAL = "POTENTIAL"
+    PROBABLE = "PROBABLE"
     REQUIRES_MANUAL_VERIFICATION = "REQUIRES_MANUAL_VERIFICATION"
     CONFIRMED = "CONFIRMED"
+    FALSE_POSITIVE = "FALSE_POSITIVE"
+    RESOLVED = "RESOLVED"
+    REOPENED = "REOPENED"
 
 
 class Observation(BaseModel):
@@ -96,7 +100,7 @@ class Observation(BaseModel):
 
 
 class Finding(BaseModel):
-    """Structured security assessment finding."""
+    """Structured security assessment finding with lifecycle tracking and evidence."""
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     scanner: str = Field(..., description="Identifier of the scanner that generated the finding")
@@ -107,17 +111,27 @@ class Finding(BaseModel):
     status: FindingStatus = Field(
         default=FindingStatus.POTENTIAL, description="Verification status"
     )
+    target_url: Optional[str] = Field(default=None, description="Root target URL")
     endpoint_url: str = Field(..., description="Affected endpoint URL")
     parameter_name: Optional[str] = Field(default=None, description="Associated parameter name if any")
     description: str = Field(..., description="Detailed description of the observation or finding")
-    evidence: str = Field(default="", description="Supporting evidence data")
+    evidence: str = Field(default="", description="Supporting evidence summary string")
+    reproduction_context: Optional[str] = Field(
+        default=None, description="Contextual reproduction command or steps"
+    )
     recommendation: str = Field(
         default="Conduct manual architectural review and follow secure coding best practices.",
         description="Remediation guidance",
     )
     references: List[str] = Field(default_factory=list, description="External references or OWASP links")
+    first_seen: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), description="Timestamp when first observed"
+    )
+    last_seen: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), description="Timestamp when last observed"
+    )
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc), description="Discovery timestamp"
+        default_factory=lambda: datetime.now(timezone.utc), description="Record creation timestamp"
     )
 
     @property
@@ -131,9 +145,28 @@ class Finding(BaseModel):
         return self.parameter_name
 
     @property
+    def fingerprint(self) -> str:
+        """Deterministic fingerprint for tracking finding identity across scans."""
+        from urllib.parse import urlparse
+        import hashlib
+        parsed = urlparse(self.endpoint_url)
+        path = parsed.path or "/"
+        param = (self.parameter_name or "").strip().lower()
+        cat = self.category.strip().lower()
+        title_norm = self.title.strip().lower()
+        key = f"{self.scanner}:{cat}:{parsed.netloc}:{path}:{param}:{title_norm}"
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+    @property
     def deduplication_key(self) -> str:
-        """Unique key for deduplicating findings."""
+        """Unique key for deduplicating findings within a scan session."""
         return f"{self.scanner}::{self.category}::{self.endpoint_url}::{self.parameter_name or ''}::{self.title}"
+
+    def transition_to(self, new_status: FindingStatus) -> None:
+        """Update finding verification status."""
+        self.status = new_status
+        self.last_seen = datetime.now(timezone.utc)
+
 
 
 @dataclass

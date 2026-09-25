@@ -1,5 +1,6 @@
 """VulnForge modular security scanner framework and registry."""
 
+from vulnforge.scanners.authorization import AuthorizationScanner
 from vulnforge.scanners.base import BaseScanner, ScannerMode
 from vulnforge.scanners.context import AnalysisContext
 from vulnforge.scanners.cors import CORSScanner
@@ -40,6 +41,7 @@ ScannerRegistry.register(DirectoryTraversalScanner())
 ScannerRegistry.register(CSRFScanner())
 ScannerRegistry.register(FileUploadScanner())
 ScannerRegistry.register(EndpointInspectorScanner())
+ScannerRegistry.register(AuthorizationScanner())
 
 __all__ = [
     "BaseScanner",
@@ -64,7 +66,9 @@ __all__ = [
     "CSRFScanner",
     "FileUploadScanner",
     "EndpointInspectorScanner",
+    "AuthorizationScanner",
     "ScannerException",
     "ScannerRegistrationError",
     "ScannerExecutionError",
 ]
+

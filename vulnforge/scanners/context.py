@@ -63,6 +63,13 @@ class AnalysisContext:
         """Add an observation to the session."""
         self.observations.append(observation)
 
+    def add_observation(self, observation: Observation) -> None:
+        """Alias to record_observation."""
+        self.observations.append(observation)
+
     def record_finding(self, finding: Finding) -> None:
         """Add a finding to the session."""
         self.findings.append(finding)
+
+
+ScannerContext = AnalysisContext

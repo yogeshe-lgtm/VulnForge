@@ -51,6 +51,9 @@ class Endpoint(BaseModel):
     authentication_required: Optional[bool] = Field(
         default=None, description="Whether endpoint appears to require authentication"
     )
+    discovered_from: Optional[str] = Field(
+        default=None, description="Parent URL or asset from which this endpoint was discovered"
+    )
 
     @classmethod
     def from_url(
@@ -62,6 +65,7 @@ class Endpoint(BaseModel):
         content_type: Optional[str] = None,
         response_size: int = 0,
         parameters: Optional[List[Parameter]] = None,
+        discovered_from: Optional[str] = None,
     ) -> "Endpoint":
         """Factory method to construct an Endpoint from a URL."""
         parsed = urlparse(url)
@@ -83,7 +87,6 @@ class Endpoint(BaseModel):
                     )
                 )
 
-
         return cls(
             url=url,
             scheme=scheme,
@@ -95,6 +98,7 @@ class Endpoint(BaseModel):
             status_code=status_code,
             response_size=response_size,
             source=source,
+            discovered_from=discovered_from,
         )
 
 

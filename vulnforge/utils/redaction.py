@@ -65,3 +65,13 @@ def redact_dict_secrets(data: Dict[str, Any]) -> Dict[str, Any]:
             sanitized[k] = v
 
     return sanitized
+
+
+def mask_token(token: str, visible_prefix: int = 6, visible_suffix: int = 4) -> str:
+    """Mask the middle portion of a token string for safe diagnostic display."""
+    if not token:
+        return ""
+    if len(token) <= (visible_prefix + visible_suffix):
+        return "[REDACTED]"
+    return f"{token[:visible_prefix]}...{token[-visible_suffix:]}"
+
