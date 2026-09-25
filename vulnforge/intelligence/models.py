@@ -3,8 +3,9 @@
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from vulnforge.crawler.forms import DiscoveredForm
 from vulnforge.models.endpoint import Endpoint
 from vulnforge.models.parameter import Parameter
 
@@ -86,14 +87,16 @@ class EndpointPriority(BaseModel):
 class AttackSurface(BaseModel):
     """Consolidated attack surface intelligence model."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     target_url: str = Field(..., description="Root target URL assessed")
     hosts: List[str] = Field(default_factory=list, description="Unique hostnames in attack surface")
     endpoints: List[Endpoint] = Field(default_factory=list, description="Discovered endpoints")
     parameters: List[Parameter] = Field(default_factory=list, description="Discovered parameters")
-    forms: List[Dict[str, Any]] = Field(default_factory=list, description="Extracted HTML forms")
+    forms: List[DiscoveredForm] = Field(default_factory=list, description="Extracted HTML forms")
     api_endpoints: List[Endpoint] = Field(default_factory=list, description="API route endpoints")
     javascript_assets: List[str] = Field(default_factory=list, description="Discovered script URLs")
-    technologies: List[Dict[str, Any]] = Field(
+    technologies: List[Any] = Field(
         default_factory=list, description="Identified server and framework technologies"
     )
     classifications: Dict[str, int] = Field(

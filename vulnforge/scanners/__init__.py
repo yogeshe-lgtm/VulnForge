@@ -17,12 +17,15 @@ from vulnforge.scanners.information_disclosure import InformationDisclosureScann
 from vulnforge.scanners.open_redirect import OpenRedirectScanner
 from vulnforge.scanners.registry import ScannerRegistry
 from vulnforge.scanners.result import (
+    AssessmentCoverage,
     Finding,
     FindingSeverity,
     FindingStatus,
     Observation,
     ObservationType,
     ResponseDifference,
+    ScannerExecutionReport,
+    ScannerStatus,
     compare_responses,
 )
 from vulnforge.scanners.security_headers import SecurityHeadersScanner
@@ -54,6 +57,9 @@ __all__ = [
     "Finding",
     "FindingSeverity",
     "FindingStatus",
+    "ScannerStatus",
+    "ScannerExecutionReport",
+    "AssessmentCoverage",
     "ResponseDifference",
     "compare_responses",
     "SecurityHeadersScanner",

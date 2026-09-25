@@ -16,6 +16,7 @@ from vulnforge.intelligence import (
     ParameterClassifier,
     PriorityLevel,
 )
+from vulnforge.crawler.forms import DiscoveredForm, FormField
 from vulnforge.models.endpoint import Endpoint
 from vulnforge.models.parameter import Parameter, ParameterLocation
 from vulnforge.models.target import Target
@@ -224,6 +225,26 @@ class TestAttackSurfaceBuilder:
         # Check endpoints are sorted by priority score descending
         scores = [ep.priority_score for ep in surface.endpoints]
         assert scores == sorted(scores, reverse=True)
+
+    def test_attack_surface_construction_with_forms(self):
+        endpoints = [Endpoint.from_url("https://app.local/login", method="POST")]
+        form = DiscoveredForm(
+            action="https://app.local/login",
+            method="POST",
+            enctype="application/x-www-form-urlencoded",
+            fields=[
+                FormField(name="username", field_type="text"),
+                FormField(name="password", field_type="password"),
+            ],
+            source_url="https://app.local/login.php",
+        )
+        surface = AttackSurfaceBuilder.build(
+            target_url="https://app.local",
+            endpoints=endpoints,
+            forms=[form],
+        )
+        assert len(surface.forms) == 1
+        assert surface.forms[0].action == "https://app.local/login"
 
     def test_scanner_recommendations(self):
         api_ep = Endpoint.from_url("https://app.local/api/v1/resource", method="GET")

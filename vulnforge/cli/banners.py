@@ -50,6 +50,30 @@ def render_banner(console: Console, compact: bool = False) -> None:
     console.print(panel)
 
 
+def render_command_intro(
+    console: Console,
+    command: str,
+    purpose: str,
+    will_do: Optional[List[str]] = None,
+    will_not_do: Optional[List[str]] = None,
+) -> None:
+    """Display a concise, professional command introduction explaining intent and scope boundaries."""
+    console.print(f"[bold cyan]VULNFORGE {command.upper()}[/bold cyan]\n")
+    console.print(f"[bold white]Purpose:[/bold white]\n  {purpose}\n")
+
+    if will_do:
+        console.print("[bold green]This command will:[/bold green]")
+        for item in will_do:
+            console.print(f"  [green]•[/green] {item}")
+        console.print()
+
+    if will_not_do:
+        console.print("[bold yellow]This command will NOT:[/bold yellow]")
+        for item in will_not_do:
+            console.print(f"  [yellow]•[/yellow] {item}")
+        console.print()
+
+
 def render_target_summary(console: Console, target: Target, profile: str) -> None:
     """Display scan target summary details table."""
     table = Table(title="[bold cyan]TARGET PROFILE[/bold cyan]", border_style="dim")
@@ -250,10 +274,28 @@ def render_forms_table(console: Console, forms: List[Any], limit: int = 10) -> N
     table.add_column("Input Fields", style="cyan")
 
     for form in forms[:limit]:
-        field_summary = ", ".join(f"{f.name} ({f.field_type})" for f in form.fields) if form.fields else "None"
+        if isinstance(form, dict):
+            method = form.get("method", "GET")
+            action = form.get("action", "")
+            fields = form.get("fields", [])
+            field_parts = []
+            for f in fields:
+                if isinstance(f, dict):
+                    field_parts.append(f"{f.get('name', '')} ({f.get('field_type', '')})")
+                elif hasattr(f, "name"):
+                    field_parts.append(f"{f.name} ({getattr(f, 'field_type', '')})")
+                else:
+                    field_parts.append(str(f))
+            field_summary = ", ".join(field_parts) if field_parts else "None"
+        else:
+            method = getattr(form, "method", "GET")
+            action = getattr(form, "action", "")
+            fields = getattr(form, "fields", [])
+            field_summary = ", ".join(f"{f.name} ({f.field_type})" for f in fields) if fields else "None"
+
         table.add_row(
-            form.method,
-            form.action,
+            str(method),
+            str(action),
             field_summary[:65] + "..." if len(field_summary) > 65 else field_summary,
         )
     if len(forms) > limit:
@@ -826,24 +868,206 @@ def render_ci_policy_summary(
     grid.add_column(style="bold white", width=22)
     grid.add_column(style="cyan")
 
-    status_str = "[bold green]PASSED (NO BLOCKING VULNERABILITIES)[/bold green]" if is_passed else "[bold red]FAILED (POLICY THRESHOLD EXCEEDED)[/bold red]"
-    border_color = "green" if is_passed else "red"
+def render_scanner_execution_table(console: Console, scanner_reports: List[Any]) -> None:
+    """Display the execution status, telemetry, and skip/failure reasons for all scanner modules."""
+    if not scanner_reports:
+        return
+    table = Table(title="[bold cyan]SECURITY SCANNER EXECUTION STATUS[/bold cyan]", border_style="dim")
+    table.add_column("Scanner", style="bold white", width=24)
+    table.add_column("Status", width=12, justify="center")
+    table.add_column("Endpoints", justify="right", width=10)
+    table.add_column("Params", justify="right", width=8)
+    table.add_column("Findings", justify="right", width=9)
+    table.add_column("Telemetry / Reason", style="dim")
 
-    grid.add_row("Target", target, "Policy Outcome", status_str)
-    grid.add_row("Fail-On Threshold", f"[yellow]{threshold.upper()}[/yellow]", "Total Findings", str(total_findings))
-    grid.add_row("Blocking Findings", f"[bold red]{blocking_findings}[/bold red]" if blocking_findings > 0 else "[green]0[/green]", "Regressions", f"[bold red]{regressions_count}[/bold red]" if regressions_count > 0 else "[green]0[/green]")
+    for rep in scanner_reports:
+        status_val = rep.status.value if hasattr(rep.status, "value") else str(rep.status)
+        if status_val == "COMPLETED":
+            status_fmt = "[green]COMPLETED[/green]"
+        elif status_val == "SKIPPED":
+            status_fmt = "[yellow]SKIPPED[/yellow]"
+        elif status_val in ("FAILED", "ERROR"):
+            status_fmt = "[bold red]FAILED[/bold red]"
+        else:
+            status_fmt = f"[dim]{status_val}[/dim]"
+
+        findings_count = len(rep.findings)
+        findings_fmt = f"[yellow]{findings_count}[/yellow]" if findings_count > 0 else "0"
+        
+        detail = rep.reason or rep.error or "-"
+
+        table.add_row(
+            rep.scanner_name,
+            status_fmt,
+            str(rep.endpoints_tested),
+            str(rep.parameters_tested),
+            findings_fmt,
+            detail[:55] + "..." if len(detail) > 55 else detail,
+        )
+    console.print(table)
+    console.print()
+
+
+def render_assessment_coverage(console: Console, coverage: Any) -> None:
+    """Display comprehensive assessment coverage and untested surface reasons."""
+    if not coverage:
+        return
+
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan", justify="right")
+    grid.add_column(style="bold white", width=22)
+    grid.add_column(style="cyan", justify="right")
+
+    grid.add_row(
+        "Endpoints Discovered", str(coverage.endpoints_discovered),
+        "Parameters Discovered", str(coverage.parameters_discovered),
+    )
+    grid.add_row(
+        "Endpoints Tested", f"[green]{coverage.endpoints_tested}[/green]",
+        "Parameters Tested", f"[green]{coverage.parameters_tested}[/green]",
+    )
+    grid.add_row(
+        "Endpoints Skipped", f"[dim]{coverage.endpoints_skipped}[/dim]",
+        "Parameters Skipped", f"[dim]{coverage.parameters_skipped}[/dim]",
+    )
+    grid.add_row(
+        "Scanners Executed", f"[green]{coverage.scanners_executed}[/green]",
+        "Scanners Skipped", f"[yellow]{coverage.scanners_skipped}[/yellow]",
+    )
+    grid.add_row(
+        "Scanners Failed", f"[bold red]{coverage.scanners_failed}[/bold red]" if coverage.scanners_failed > 0 else "[green]0[/green]",
+        "Scanners Available", str(getattr(coverage, "scanners_available", getattr(coverage, "scanners_total", 0))),
+    )
 
     panel = Panel(
         grid,
-        title=f"[bold {border_color}]VULNFORGE CI/CD SECURITY GATE[/bold {border_color}]",
-        border_style=border_color,
+        title="[bold cyan]ASSESSMENT COVERAGE & SCOPE METRICS[/bold cyan]",
+        border_style="cyan",
         padding=(1, 2),
     )
     console.print(panel)
     console.print()
 
+    if coverage.untested_reasons:
+        table_untested = Table(title="[bold yellow]AREAS NOT TESTED & CONSTRAINTS[/bold yellow]", border_style="yellow")
+        table_untested.add_column("Constraint / Limitation Category", style="bold white", width=35)
+        table_untested.add_column("Explanation / Rationale", style="yellow")
+
+        if isinstance(coverage.untested_reasons, dict):
+            for cat, reason in coverage.untested_reasons.items():
+                table_untested.add_row(str(cat), str(reason))
+        elif isinstance(coverage.untested_reasons, list):
+            for item in coverage.untested_reasons:
+                if isinstance(item, tuple) and len(item) == 2:
+                    table_untested.add_row(str(item[0]), str(item[1]))
+                elif ":" in str(item):
+                    cat, reason = str(item).split(":", 1)
+                    table_untested.add_row(cat.strip(), reason.strip())
+                else:
+                    table_untested.add_row("Limitation", str(item))
+        console.print(table_untested)
+        console.print()
 
 
+def render_scan_failed_dashboard(
+    console: Console,
+    target_host: str,
+    reason: str,
+    component: str = "Scan Engine",
+    error_details: Optional[str] = None,
+) -> None:
+    """Display structured scan failure dashboard clearly stating no security conclusion can be drawn."""
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold white", width=18)
+    grid.add_column(style="bold red")
+
+    grid.add_row("Target", target_host)
+    grid.add_row("Assessment Status", "FAILED")
+    grid.add_row("Failed Component", component)
+    grid.add_row("Failure Reason", reason)
+    grid.add_row("Findings Status", "NOT AVAILABLE (Assessment Incomplete)")
+    grid.add_row("Security Conclusion", "NO CONCLUSION CAN BE DRAWN - TARGET UNASSESSED")
+
+    panel = Panel(
+        grid,
+        title="[bold red]════════════════ VULNFORGE SCAN FAILED ════════════════[/bold red]",
+        border_style="red",
+        padding=(1, 2),
+    )
+    console.print(panel)
+
+    if error_details:
+        console.print("\n[bold red]Error Details:[/bold red]")
+        console.print(Panel(error_details, border_style="dim red"))
+
+    console.print("\n[bold yellow]Recommended Next Steps:[/bold yellow]")
+    console.print("  [cyan]•[/cyan] Run with [bold white]--verbose[/bold white] or [bold white]--debug[/bold white] for complete execution logs.")
+    console.print("  [cyan]•[/cyan] Run [bold white]vulnforge doctor[/bold white] to verify system integrity and schemas.")
+    console.print("  [cyan]•[/cyan] Check connectivity, target scope, and input arguments.\n")
 
 
+def render_parameter_intelligence_table(console: Console, parameters: List[Any], limit: int = 15) -> None:
+    """Display discovered parameters with scanner candidates and educational rationale."""
+    if not parameters:
+        return
+    table = Table(title="[bold cyan]PARAMETER INTELLIGENCE & TESTING CANDIDATES[/bold cyan]", border_style="dim")
+    table.add_column("Parameter", style="bold white", width=16)
+    table.add_column("Location", style="yellow", width=10)
+    table.add_column("Classification", style="cyan", width=16)
+    table.add_column("Candidate Scanners", style="bold magenta", width=22)
+    table.add_column("Selection Rationale", style="dim")
 
+    for p in parameters[:limit]:
+        cls_name = getattr(p, "classification", "UNKNOWN")
+        recs = getattr(p, "scanner_candidates", [])
+        recs_str = ", ".join(recs[:2]) if recs else "General Testing"
+        rationale = getattr(p, "recommendation_rationale", "")
+        if not rationale and hasattr(p, "rationale"):
+            rationale = p.rationale
+
+        table.add_row(
+            p.name,
+            p.location.value if hasattr(p.location, "value") else str(p.location),
+            f"[bold]{cls_name}[/bold]",
+            recs_str,
+            rationale[:55] + "..." if len(rationale) > 55 else rationale or "Dynamic input parameter",
+        )
+    if len(parameters) > limit:
+        table.caption = f"[dim]Showing {limit} of {len(parameters)} parameters[/dim]"
+    console.print(table)
+    console.print()
+
+
+def render_doctor_results(console: Console, checks: List[Dict[str, Any]]) -> None:
+    """Display system diagnostics and doctor readiness check results."""
+    table = Table(title="[bold cyan]VULNFORGE SYSTEM DIAGNOSTICS & DOCTOR[/bold cyan]", border_style="dim")
+    table.add_column("Diagnostic Subsystem", style="bold white", width=28)
+    table.add_column("Status", width=12, justify="center")
+    table.add_column("Details / Diagnosis", style="dim")
+
+    all_passed = True
+    for chk in checks:
+        status = chk.get("status", "PASS")
+        if status == "PASS":
+            status_fmt = "[bold green]PASS[/bold green]"
+        elif status == "WARN":
+            status_fmt = "[bold yellow]WARN[/bold yellow]"
+        else:
+            status_fmt = "[bold red]FAIL[/bold red]"
+            all_passed = False
+
+        table.add_row(
+            chk.get("name", "Unknown Check"),
+            status_fmt,
+            chk.get("details", "-"),
+        )
+
+    console.print(table)
+    console.print()
+
+    if all_passed:
+        console.print(Panel("[bold green]ALL DIAGNOSTIC CHECKS PASSED — VULNFORGE ENGINE IS READY[/bold green]", border_style="green"))
+    else:
+        console.print(Panel("[bold red]SOME CHECKS FAILED — PLEASE REVIEW DIAGNOSTICS ABOVE[/bold red]", border_style="red"))
+    console.print()

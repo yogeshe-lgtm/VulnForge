@@ -81,6 +81,50 @@ graph TD
 
 ---
 
+---
+
+## What Does VulnForge Actually Do?
+
+VulnForge follows an explainable, multi-stage assessment pipeline designed to bridge reconnaissance, attack-surface intelligence, and security testing:
+
+```text
+Recon   ──► Learns about the target (headers, technologies, robots.txt, sitemaps, connectivity)
+  │
+Crawl   ──► Discovers the application's surface (URLs, endpoints, forms, parameters, JS assets)
+  │
+Surface ──► Organizes and prioritizes what can be tested with deterministic risk scoring
+  │
+Scan    ──► Executes relevant, supported security checks against prioritized attack surfaces
+  │
+Finding ──► Explains detected security signals with structured evidence and confidence metrics
+  │
+Show    ──► Investigates individual scan results, telemetry, and detailed remediation steps
+  │
+Diff    ──► Compares assessments over time to track newly introduced and resolved issues
+```
+
+### Assessment Pipeline Stages
+* **`vulnforge recon`**: Passive reconnaissance, HTTP header analysis, technology fingerprinting, and robots/sitemap inspection.
+* **`vulnforge crawl`**: Asynchronous recursive crawling, form discovery with normalized inputs, parameter extraction, and JavaScript route analysis.
+* **`vulnforge surface`**: Attack surface intelligence modeling, input classification (`IDENTIFIER`, `AUTH`, `FILE_PATH`, etc.), and explainable scanner candidate selection.
+* **`vulnforge scan`**: Orchestrates scope validation, reconnaissance, crawling, surface intelligence, dynamic scanner execution, evidence collection, and automated correlation.
+* **`vulnforge show`**: Detailed drilldown into scan metadata, discovered inventory, scanner statuses, and itemized findings with evidence.
+* **`vulnforge diff`**: Comparative regression analysis between two scans to identify `NEW`, `PERSISTENT`, and `RESOLVED` vulnerabilities.
+* **`vulnforge doctor`**: Environmental diagnostics, verifying Python version, dependencies, SQLite database, scanner registry, models, report engine, and storage permissions.
+
+---
+
+## What VulnForge Does NOT Guarantee
+
+> [!IMPORTANT]
+> **A scan that completes with zero findings does NOT prove that the target is secure.**
+
+* **Zero Findings vs. Security State**: A clean scan report only indicates that no security signals were detected by the enabled scanners against the discovered attack surface within configured scope and authentication boundaries.
+* **Coverage Constraints**: Endpoints requiring unconfigured authentication, complex multi-step workflows, or client-side single-page interactions outside the crawler's depth will remain **untested**. VulnForge clearly displays **Assessment Coverage** and **What Was Not Tested** in its scan summaries.
+* **Non-Destructive Boundaries**: VulnForge intentionally avoids destructive payloads, brute-force credential stuffing, and invasive exploits, prioritizing safe and responsible assessment over invasive exploitation.
+
+---
+
 ## Complete CLI Commands Reference
 
 ```text
@@ -104,6 +148,7 @@ Commands:
   history     View past scan sessions recorded in local SQLite database.
   stats       Display scan performance metrics, request statistics, and telemetry.
   scanners    List available security vulnerability scanners and modules.
+  doctor      Run environmental diagnostics and subsystem integrity checks.
   config      Manage VulnForge settings and configuration file.
   version     Show VulnForge version and licensing information.
 ```

@@ -61,6 +61,46 @@ class FindingStatus(str, Enum):
     REOPENED = "REOPENED"
 
 
+class ScannerStatus(str, Enum):
+    """Execution state of an individual security scanner module."""
+
+    NOT_RUN = "NOT_RUN"
+    SKIPPED = "SKIPPED"
+    BLOCKED = "BLOCKED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    ERROR = "ERROR"
+
+
+class ScannerExecutionReport(BaseModel):
+    """Detailed execution status, telemetry metrics, and diagnostic explanation for a scanner."""
+
+    scanner_name: str = Field(..., description="Module identifier")
+    category: str = Field(default="General", description="Vulnerability category")
+    status: ScannerStatus = Field(default=ScannerStatus.NOT_RUN, description="Execution status")
+    reason: str = Field(default="", description="Explainable status reason")
+    endpoints_tested: int = Field(default=0, description="Count of endpoints evaluated")
+    parameters_tested: int = Field(default=0, description="Count of parameters probed")
+    observations_count: int = Field(default=0, description="Telemetry signals recorded")
+    findings_count: int = Field(default=0, description="Findings generated")
+
+
+class AssessmentCoverage(BaseModel):
+    """Overall assessment coverage metrics and unassessed area quantification."""
+
+    endpoints_discovered: int = Field(default=0, description="Total unique endpoints mapped")
+    endpoints_tested: int = Field(default=0, description="Endpoints successfully evaluated by scanners")
+    endpoints_skipped: int = Field(default=0, description="Endpoints bypassed from testing")
+    parameters_discovered: int = Field(default=0, description="Total parameters identified")
+    parameters_tested: int = Field(default=0, description="Parameters actively evaluated")
+    parameters_skipped: int = Field(default=0, description="Parameters unassessed")
+    scanners_available: int = Field(default=0, description="Total registered scanner modules")
+    scanners_executed: int = Field(default=0, description="Scanners successfully run to completion")
+    scanners_skipped: int = Field(default=0, description="Scanners skipped due to lack of inputs/filter")
+    scanners_failed: int = Field(default=0, description="Scanners that encountered runtime errors")
+    untested_reasons: List[str] = Field(default_factory=list, description="Categorized reasons for untested areas")
+
+
 class Observation(BaseModel):
     """Represents a factual telemetry data-point observed during endpoint inspection."""
 

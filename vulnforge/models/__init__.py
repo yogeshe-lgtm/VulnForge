@@ -1,11 +1,5 @@
-from vulnforge.intelligence.models import (
-    AttackSurface,
-    EndpointClassification,
-    EndpointPriority,
-    ParameterClassification,
-    ParameterClassificationResult,
-    PriorityLevel,
-)
+"""VulnForge Core Data Models."""
+
 from vulnforge.models.endpoint import Endpoint
 from vulnforge.models.evidence import (
     EvidenceCollection,
@@ -27,10 +21,4 @@ __all__ = [
     "EvidenceCollection",
     "EvidenceItem",
     "EvidenceType",
-    "AttackSurface",
-    "EndpointClassification",
-    "EndpointPriority",
-    "ParameterClassification",
-    "ParameterClassificationResult",
-    "PriorityLevel",
 ]

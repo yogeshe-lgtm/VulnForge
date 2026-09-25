@@ -4,6 +4,7 @@ from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urlparse
 
+from vulnforge.crawler.forms import DiscoveredForm
 from vulnforge.intelligence.endpoints import EndpointClassifier
 from vulnforge.intelligence.models import (
     AttackSurface,
@@ -37,9 +38,9 @@ class AttackSurfaceBuilder:
         target_url: str,
         endpoints: List[Endpoint],
         parameters: Optional[List[Parameter]] = None,
-        forms: Optional[List[Dict[str, Any]]] = None,
+        forms: Optional[List[Any]] = None,
         javascript_assets: Optional[List[str]] = None,
-        technologies: Optional[List[Dict[str, Any]]] = None,
+        technologies: Optional[List[Any]] = None,
     ) -> AttackSurface:
         """Construct a fully classified and prioritized AttackSurface instance.
 
@@ -101,12 +102,23 @@ class AttackSurfaceBuilder:
             if p.classification in HIGH_INTEREST_PARAM_CLASSES:
                 high_priority_inputs += 1
 
+        # 6. Normalize forms
+        normalized_forms: List[DiscoveredForm] = []
+        for f in (forms or []):
+            if isinstance(f, DiscoveredForm):
+                normalized_forms.append(f)
+            elif isinstance(f, dict):
+                try:
+                    normalized_forms.append(DiscoveredForm.model_validate(f))
+                except Exception:
+                    pass
+
         return AttackSurface(
             target_url=target_url,
             hosts=sorted(list(all_hosts)),
             endpoints=sorted_endpoints,
             parameters=params_list,
-            forms=forms or [],
+            forms=normalized_forms,
             api_endpoints=api_endpoints,
             javascript_assets=javascript_assets or [],
             technologies=technologies or [],
@@ -151,3 +163,78 @@ class AttackSurfaceBuilder:
             recs.add("sqli")
 
         return sorted(list(recs))
+
+    @classmethod
+    def get_parameter_recommendations(cls, param: Parameter) -> List[Dict[str, Any]]:
+        """Map parameter traits to candidate scanners with explainable testing rationale."""
+        candidates = []
+        p_class = (param.classification or "UNKNOWN").upper()
+        p_name = param.name.lower()
+
+        # SQL Injection
+        if p_class in ("IDENTIFIER", "SEARCH", "NUMERIC", "UNKNOWN") or any(
+            k in p_name for k in ("id", "user", "query", "select", "order", "sort", "item", "page")
+        ):
+            candidates.append({
+                "scanner": "SQL Injection (sqli)",
+                "priority": "HIGH" if p_class in ("IDENTIFIER", "SEARCH") else "MEDIUM",
+                "reasons": [
+                    "Parameter accepts user-controlled input query/form data",
+                    "Parameter reaches dynamic application endpoint",
+                    "Classification profile matches SQL syntax error / boolean injection testing",
+                ],
+            })
+
+        # Cross-Site Scripting (XSS)
+        if p_class in ("SEARCH", "URL_INPUT", "UNKNOWN") or any(
+            k in p_name for k in ("q", "search", "keyword", "comment", "msg", "title", "name", "text")
+        ):
+            candidates.append({
+                "scanner": "Cross-Site Scripting (xss)",
+                "priority": "HIGH" if p_class == "SEARCH" else "MEDIUM",
+                "reasons": [
+                    "Parameter value frequently reflected in HTML responses",
+                    "Compatible with canary character reflection & encoding verification",
+                ],
+            })
+
+        # Open Redirect
+        if p_class in ("REDIRECT", "URL_INPUT") or any(
+            k in p_name for k in ("url", "redirect", "next", "return", "dest", "target", "forward")
+        ):
+            candidates.append({
+                "scanner": "Open Redirect (open-redirect)",
+                "priority": "HIGH",
+                "reasons": [
+                    "Parameter name or classification indicates destination URL handling",
+                    "Compatible with out-of-scope redirection validation checks",
+                ],
+            })
+
+        # Directory Traversal
+        if p_class in ("FILE_PATH", "FILE_NAME") or any(
+            k in p_name for k in ("file", "path", "doc", "template", "view", "page", "include", "load")
+        ):
+            candidates.append({
+                "scanner": "Directory Traversal (traversal)",
+                "priority": "HIGH",
+                "reasons": [
+                    "Parameter carries filesystem or template reference",
+                    "Compatible with path traversal & resource inclusion testing",
+                ],
+            })
+
+        # Authentication / Access Control
+        if p_class in ("AUTHENTICATION", "SESSION") or any(
+            k in p_name for k in ("user", "pass", "token", "auth", "session", "key", "login")
+        ):
+            candidates.append({
+                "scanner": "Authentication & Session Checks (authorization)",
+                "priority": "MEDIUM",
+                "reasons": [
+                    "Parameter carries sensitive authentication or session identifiers",
+                    "Audited for credential leakage and transport security",
+                ],
+            })
+
+        return candidates

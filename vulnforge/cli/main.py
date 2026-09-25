@@ -8,6 +8,7 @@ from vulnforge.cli.commands import (
     cmd_config_init,
     cmd_config_show,
     cmd_diff,
+    cmd_doctor,
     cmd_history,
     cmd_regression,
     cmd_scanners,
@@ -51,6 +52,14 @@ app.add_typer(config_app, name="config")
 def version() -> None:
     """Show VulnForge version and licensing information."""
     cmd_version()
+
+
+@app.command("doctor")
+def doctor() -> None:
+    """Run environmental diagnostics, subsystem verifications, and integrity checks."""
+    exit_code = cmd_doctor()
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
 
 
 @app.command("scan")
@@ -110,6 +119,9 @@ def scan(
     quiet: bool = typer.Option(
         False, "--quiet", "-q", help="Suppress banner and non-essential output."
     ),
+    explain: bool = typer.Option(
+        False, "--explain", help="Explain scanner candidate decisions and test rationale."
+    ),
     allow_private: bool = typer.Option(
         True, "--allow-private", help="Allow private/loopback/lab IP addresses."
     ),
@@ -139,6 +151,7 @@ def scan(
             profile=profile,
             verbose=verbose,
             quiet=quiet,
+            explain=explain,
             allow_private=allow_private,
             output=output,
             output_format=format_opt,

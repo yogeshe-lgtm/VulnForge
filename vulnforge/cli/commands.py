@@ -15,11 +15,14 @@ from rich.table import Table
 from vulnforge import __version__
 from vulnforge.cli.banners import (
     render_api_analysis_table,
+    render_assessment_coverage,
     render_attack_surface_dashboard,
     render_attack_surface_graph,
     render_attack_surface_summary,
     render_banner,
     render_ci_policy_summary,
+    render_command_intro,
+    render_doctor_results,
     render_endpoint_priority_table,
     render_endpoints_table,
     render_finding_detail,
@@ -30,10 +33,13 @@ from vulnforge.cli.banners import (
     render_jwt_analysis_table,
     render_observations_table,
     render_parameter_classification_table,
+    render_parameter_intelligence_table,
     render_regression_report,
     render_scan_completion_dashboard,
     render_scan_diff_table,
+    render_scan_failed_dashboard,
     render_scanner_engine_summary,
+    render_scanner_execution_table,
     render_scanner_registry_table,
     render_statistics,
     render_target_summary,
@@ -47,7 +53,6 @@ from vulnforge.intelligence import AttackSurfaceBuilder, AttackSurfaceGraph
 from vulnforge.fuzz import ControlledFuzzer, FuzzSummary
 from vulnforge.reporting.sarif import SARIFReportGenerator
 from vulnforge.integrations import ProxyAdapter
-
 
 from vulnforge.cli.themes import SECURITY_THEME
 from vulnforge.core.config import (
@@ -130,12 +135,32 @@ async def execute_scan(
     allow_private: bool = True,
     output: Optional[str] = None,
     output_format: str = "terminal",
+    explain: bool = False,
 ) -> int:
     """Execute complete end-to-end security assessment scan."""
     cfg = load_config(profile_name=profile)
 
     if not quiet:
         render_banner(console)
+        render_command_intro(
+            console=console,
+            command="SECURITY SCAN",
+            purpose="Execute an authorized end-to-end vulnerability assessment pipeline.",
+            will_do=[
+                "Validate target authorization and scope",
+                "Perform passive technology reconnaissance and header inspection",
+                "Crawl endpoint structure and discover forms & parameters",
+                "Build and prioritize AttackSurface intelligence model",
+                "Execute active security analyzers against candidate input surfaces",
+                "Correlate findings, calculate confidence, and generate reports",
+            ],
+            will_not_do=[
+                "Attempt credential brute-forcing or credential theft",
+                "Perform destructive data modifications or persistence",
+                "Leave the authorized target scope",
+                "Fabricate findings or report unverified assertions",
+            ],
+        )
 
     parsed_headers = parse_key_value_pairs(headers)
     parsed_cookies = parse_key_value_pairs(cookies)
@@ -147,9 +172,12 @@ async def execute_scan(
     scan_profile = profile or cfg.default_profile
     crawl_depth = cfg.crawl_depth
 
-    # Resolve active scanner filters
     final_includes = include_scanners or cfg.enabled_scanners
     final_excludes = exclude_scanners or cfg.excluded_scanners
+
+    failed_reason: Optional[str] = None
+    failed_component: str = "Scan Engine"
+    error_details: Optional[str] = None
 
     try:
         target = Target.from_url(
@@ -159,8 +187,13 @@ async def execute_scan(
             allow_private=allow_private,
         )
     except TargetValidationError as e:
-        console.print(f"[bold red][ERROR][/bold red] Target validation failed: {e}")
-        return 1
+        failed_reason = f"Target validation failed: {e}"
+        failed_component = "Target & Scope Validator"
+        if not quiet:
+            render_scan_failed_dashboard(console, target_host=target_url, reason=failed_reason, component=failed_component)
+        else:
+            console.print(f"[bold red][ERROR][/bold red] {failed_reason}")
+        return 2
 
     scope_engine = ScopeEngine(
         allowed_domains=target.scope,
@@ -206,10 +239,13 @@ async def execute_scan(
     observations: List[Observation] = []
     findings: List[Finding] = []
     generated_reports: List[str] = []
+    scanner_reports = []
+    assessment_coverage = None
+    attack_surface = None
 
     try:
         # STEP 1: Baseline Probe & Recon
-        with console.status("[bold cyan]Probing target baseline...[/bold cyan]", spinner="dots"):
+        with console.status("[bold cyan][1/8] Probing target baseline & connectivity...[/bold cyan]", spinner="dots"):
             root_resp = await http_engine.get(
                 target.normalized_url,
                 headers=parsed_headers,
@@ -239,7 +275,7 @@ async def execute_scan(
 
         # STEP 2: Reconnaissance (robots.txt and sitemap.xml)
         if not context.is_cancelled:
-            with console.status("[bold cyan]Inspecting robots.txt and sitemaps...[/bold cyan]", spinner="dots"):
+            with console.status("[bold cyan][2/8] Inspecting robots.txt and sitemaps...[/bold cyan]", spinner="dots"):
                 parsed_root = urlparse(target.normalized_url)
                 base_root = f"{parsed_root.scheme}://{parsed_root.netloc}"
                 robots_url = f"{base_root}/robots.txt"
@@ -271,11 +307,11 @@ async def execute_scan(
 
         # STEP 3: Web Crawling & Endpoint Discovery
         if crawl_depth > 0 and not context.is_cancelled:
-            with console.status(f"[bold cyan]Crawling endpoints (depth: {crawl_depth})...[/bold cyan]", spinner="dots") as status_bar:
+            with console.status(f"[bold cyan][3/8] Crawling endpoints (depth: {crawl_depth})...[/bold cyan]", spinner="dots") as status_bar:
                 crawler = WebCrawler(context=context, max_depth=crawl_depth)
 
                 def on_progress(url: str, d: int, total: int) -> None:
-                    status_bar.update(f"[bold cyan]Crawling [depth {d} | visited {total}]:[/bold cyan] [dim]{url[:60]}[/dim]")
+                    status_bar.update(f"[bold cyan][3/8] Crawling [depth {d} | visited {total}]:[/bold cyan] [dim]{url[:60]}[/dim]")
 
                 crawler.progress_callback = on_progress
                 crawl_result = await crawler.crawl(target.normalized_url)
@@ -305,36 +341,36 @@ async def execute_scan(
                     mock_resp = type("DummyResp", (), {"headers": {}, "body": page_data.raw_html})()
                     fingerprinter.analyze_response(mock_resp, meta_tags=page_data.meta_tags, scripts=page_data.scripts)
 
-        # STEP 3.5: Attack Surface Intelligence & Prioritization
-        detected_techs_list = [
-            {"name": t.name, "category": t.category, "confidence": t.confidence, "evidence": t.evidence, "version": t.version}
-            for t in fingerprinter.get_detected()
-        ]
+        # STEP 4: Attack Surface Intelligence & Prioritization
+        with console.status("[bold cyan][4/8] Building Attack Surface Intelligence model...[/bold cyan]", spinner="dots"):
+            detected_techs_list = [
+                {"name": t.name, "category": t.category, "confidence": t.confidence, "evidence": t.evidence, "version": t.version}
+                for t in fingerprinter.get_detected()
+            ]
 
-        attack_surface = AttackSurfaceBuilder.build(
-            target_url=target.normalized_url,
-            endpoints=endpoint_inventory.get_all(),
-            parameters=param_inventory.get_all(),
-            forms=getattr(crawl_result, "forms", []) if "crawl_result" in locals() else [],
-            javascript_assets=list(getattr(crawl_result, "scripts", [])) if "crawl_result" in locals() else [],
-            technologies=detected_techs_list,
-        )
+            attack_surface = AttackSurfaceBuilder.build(
+                target_url=target.normalized_url,
+                endpoints=endpoint_inventory.get_all(),
+                parameters=param_inventory.get_all(),
+                forms=getattr(crawl_result, "forms", []) if "crawl_result" in locals() else [],
+                javascript_assets=list(getattr(crawl_result, "scripts", [])) if "crawl_result" in locals() else [],
+                technologies=detected_techs_list,
+            )
 
-        discovered_endpoints = attack_surface.endpoints
-        # Save all enriched discovered endpoints to database
-        db.save_endpoints(context.scan_id, discovered_endpoints)
+            discovered_endpoints = attack_surface.endpoints
+            db.save_endpoints(context.scan_id, discovered_endpoints)
 
         if not quiet and verbose:
             render_attack_surface_summary(console, attack_surface)
 
-        # STEP 4: Scanner Pipeline Execution
+        # STEP 5: Scanner Pipeline Execution
         scanner_engine = ScannerEngine()
         active_scanners = ScannerRegistry.filter(
             include=final_includes, exclude=final_excludes
         )
 
         if active_scanners and not context.is_cancelled:
-            with console.status(f"[bold cyan]Running {len(active_scanners)} security analysis modules...[/bold cyan]", spinner="dots"):
+            with console.status(f"[bold cyan][5/8] Running {len(active_scanners)} security analysis modules...[/bold cyan]", spinner="dots"):
                 raw_obs, raw_findings = await scanner_engine.run(
                     scan_context=context,
                     endpoints=discovered_endpoints,
@@ -342,51 +378,92 @@ async def execute_scan(
                     include_scanners=final_includes,
                     exclude_scanners=final_excludes,
                 )
+                scanner_reports = scanner_engine.scanner_reports
+                assessment_coverage = scanner_engine.coverage
 
-            # STEP 5: Finding Correlation & Confidence Scoring & Severity Engine
-            correlation_engine = CorrelationEngine()
-            findings = correlation_engine.correlate(
-                observations=raw_obs,
-                candidate_findings=raw_findings,
-            )
-            observations = raw_obs
+            # STEP 6: Finding Correlation & Confidence Scoring
+            with console.status("[bold cyan][6/8] Correlating findings & synthesizing evidence...[/bold cyan]", spinner="dots"):
+                correlation_engine = CorrelationEngine()
+                findings = correlation_engine.correlate(
+                    observations=raw_obs,
+                    candidate_findings=raw_findings,
+                )
+                observations = raw_obs
 
             # Persist observations and correlated findings
             db.save_observations(context.scan_id, observations)
             db.save_findings(context.scan_id, findings)
 
     except KeyboardInterrupt:
-        console.print("\n[bold yellow][!] Scan interrupted safely.[/bold yellow]")
-        context.cancel()
+        failed_reason = "Scan interrupted by user (SIGINT)"
+        failed_component = "CLI Runtime"
         status_label = "cancelled"
         exit_code = 130
+        context.cancel()
 
     except ScopeViolationError as e:
-        console.print(f"\n[bold red]{e}[/bold red]")
+        failed_reason = str(e)
+        failed_component = "Scope Engine"
         status_label = "blocked"
-        exit_code = 1
+        exit_code = 4
 
     except RequestTimeoutError as e:
-        console.print(f"\n[bold yellow][!] Baseline probe timed out: {e}[/bold yellow]")
+        failed_reason = f"Baseline probe timed out: {e}"
+        failed_component = "HTTP Network Engine"
         status_label = "timeout"
-        exit_code = 1
+        exit_code = 2
 
     except ConnectionFailedError as e:
-        console.print(f"\n[bold red][ERROR] Connection failed: {e}[/bold red]")
+        failed_reason = f"Connection failed to target host: {e}"
+        failed_component = "HTTP Network Engine"
         status_label = "unreachable"
-        exit_code = 1
+        exit_code = 3
 
     except Exception as e:
-        console.print(f"\n[bold red][ERROR] Unexpected scan error: {e}[/bold red]")
+        failed_reason = str(e)
+        failed_component = "Attack Surface Intelligence" if "AttackSurface" in str(e) or "form" in str(e).lower() else "Assessment Pipeline"
+        import traceback
+        error_details = traceback.format_exc()
         status_label = "failed"
-        exit_code = 1
+        exit_code = 2
 
     finally:
         context.finish()
         await http_engine.close()
         db.update_scan_status(context.scan_id, status=status_label, stats=context.stats)
 
-    # STEP 6: Multi-Format Report Generation
+    # If the assessment failed at any point, do NOT claim 0 findings!
+    if status_label != "completed":
+        if not quiet:
+            render_scan_failed_dashboard(
+                console=console,
+                target_host=target.hostname,
+                reason=failed_reason or "Unknown execution failure",
+                component=failed_component,
+                error_details=error_details if verbose else None,
+            )
+
+        if output:
+            out_path = Path(output)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            failure_report = {
+                "scan_id": context.scan_id,
+                "target": target.model_dump(),
+                "status": status_label,
+                "reason": failed_reason,
+                "failed_component": failed_component,
+                "findings": None,
+                "coverage": None,
+                "security_conclusion": "NO CONCLUSION CAN BE DRAWN - TARGET UNASSESSED",
+            }
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(failure_report, f, indent=2)
+            if not quiet:
+                console.print(f"[yellow][!] Scan failure diagnostic exported to {out_path}[/yellow]")
+
+        return exit_code
+
+    # STEP 7: Multi-Format Report Generation
     discovered_endpoints = endpoint_inventory.get_all()
     detected_techs = [
         {"name": t.name, "category": t.category, "confidence": t.confidence, "evidence": t.evidence, "version": t.version}
@@ -421,11 +498,9 @@ async def execute_scan(
         elif out_lower.endswith(".json"):
             target_format = "json"
 
-    # Auto-generate standard reports in output directory if format is terminal or standard
     reports_dir = Path(cfg.output_directory)
     try:
         reports_dir.mkdir(parents=True, exist_ok=True)
-        # Generate HTML report
         html_rep = generate_html_report(
             scan_data=scan_meta,
             findings=findings,
@@ -438,7 +513,6 @@ async def execute_scan(
             f.write(html_rep)
         generated_reports.append(str(html_path))
 
-        # Generate JSON report
         json_rep = generate_json_report(
             scan_data=scan_meta,
             findings=findings,
@@ -451,7 +525,6 @@ async def execute_scan(
             f.write(json_rep)
         generated_reports.append(str(json_path))
 
-        # Generate Markdown report
         md_rep = generate_markdown_report(
             scan_data=scan_meta,
             findings=findings,
@@ -466,7 +539,7 @@ async def execute_scan(
     except Exception:
         pass
 
-    # Custom output file requested by user
+    # Custom user output
     if output:
         out_path = Path(output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -499,11 +572,23 @@ async def execute_scan(
         if rep_content:
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write(rep_content)
-            console.print(f"[green][+] Custom report saved to {out_path} ({target_format.upper()})[/green]")
+            if not quiet:
+                console.print(f"[green][+] Custom report saved to {out_path} ({target_format.upper()})[/green]")
 
-    # STEP 7: Final Consolidated Dashboard
+    # STEP 8: Final Consolidated Presentation
     if not quiet:
         console.print()
+        if scanner_reports:
+            render_scanner_execution_table(console, scanner_reports)
+        if assessment_coverage:
+            render_assessment_coverage(console, assessment_coverage)
+        if explain and attack_surface and attack_surface.parameters:
+            render_parameter_intelligence_table(console, attack_surface.parameters)
+
+        if findings:
+            render_findings_table(console, findings)
+            render_top_findings(console, findings)
+
         render_scan_completion_dashboard(
             console=console,
             target_host=target.hostname,
@@ -515,12 +600,15 @@ async def execute_scan(
             reports=generated_reports if generated_reports else None,
         )
 
-        if findings:
-            render_top_findings(console, findings)
-
         render_statistics(console, context.stats)
+        console.print(f"[bold cyan]Investigate findings:[/bold cyan] [bold white]vulnforge show {context.scan_id}[/bold white]\n")
 
-    return exit_code
+    elif quiet and findings:
+        for f in findings:
+            sev = (f.severity.value if hasattr(f.severity, "value") else str(f.severity)).upper()
+            console.print(f"[{sev}] {f.title} - {f.endpoint_url}")
+
+    return 1 if any((f.severity.value if hasattr(f.severity, "value") else str(f.severity)).upper() in ("CRITICAL", "HIGH") for f in findings) else 0
 
 
 async def execute_crawl(
@@ -548,6 +636,23 @@ async def execute_crawl(
 
     if not quiet:
         render_banner(console)
+        render_command_intro(
+            console=console,
+            command="CRAWLER",
+            purpose="Discover URLs, endpoints, HTML forms, input parameters, and JavaScript assets.",
+            will_do=[
+                "Traverse internal links up to configured crawl depth",
+                "Extract and normalize HTML form structures and inputs",
+                "Extract query parameters and submission methods",
+                "Parse inline and external JavaScript files for endpoint signatures",
+                "Enforce authorized target domain scope constraints",
+            ],
+            will_not_do=[
+                "Execute active vulnerability payloads",
+                "Submit destructive forms or modify server state",
+                "Crawl out-of-scope third-party origins",
+            ],
+        )
 
     parsed_headers = parse_key_value_pairs(headers)
     parsed_cookies = parse_key_value_pairs(cookies)
@@ -701,6 +806,7 @@ async def execute_crawl(
 
         console.print()
         render_statistics(console, context.stats)
+        console.print(f"[bold cyan]Next recommended command:[/bold cyan] [bold white]vulnforge surface {target.normalized_url}[/bold white]\n")
 
     if output:
         out_path = Path(output)
@@ -740,7 +846,8 @@ async def execute_crawl(
         }
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(report_data, f, indent=2)
-        console.print(f"[green][+] Crawl results saved to {out_path}[/green]")
+        if not quiet:
+            console.print(f"[green][+] Crawl results saved to {out_path}[/green]")
 
     return exit_code
 
@@ -767,6 +874,23 @@ async def execute_recon(
 
     if not quiet:
         render_banner(console)
+        render_command_intro(
+            console=console,
+            command="RECONNAISSANCE",
+            purpose="Passive reconnaissance, technology fingerprinting, and entrypoint mapping.",
+            will_do=[
+                "Validate target authorization and scope",
+                "Inspect HTTP response headers and security directives",
+                "Analyze robots.txt for hidden paths and declared directives",
+                "Parse sitemap.xml for declared endpoint structure",
+                "Fingerprint web servers, frameworks, and application technologies",
+            ],
+            will_not_do=[
+                "Send active injection payloads or exploitation attempts",
+                "Attempt credential stuffing or brute-force",
+                "Leave the authorized target domain scope",
+            ],
+        )
 
     parsed_headers = parse_key_value_pairs(headers)
     parsed_cookies = parse_key_value_pairs(cookies)
@@ -900,6 +1024,7 @@ async def execute_recon(
             console.print()
 
         render_statistics(console, context.stats)
+        console.print(f"[bold cyan]Next recommended command:[/bold cyan] [bold white]vulnforge crawl {target.normalized_url}[/bold white]\n")
 
     if output:
         out_path = Path(output)
@@ -927,7 +1052,8 @@ async def execute_recon(
         }
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(report_data, f, indent=2)
-        console.print(f"[green][+] Recon results saved to {out_path}[/green]")
+        if not quiet:
+            console.print(f"[green][+] Recon results saved to {out_path}[/green]")
 
     return exit_code
 
@@ -968,14 +1094,17 @@ def cmd_history(limit: int = 20) -> None:
 
     for scan in scans:
         scan_id_short = scan["id"][:8] + "..." if scan.get("id") else "-"
-        status_color = "green" if scan.get("status") == "completed" else "yellow"
+        status_val = scan.get("status", "-")
+        status_color = "green" if status_val == "completed" else "red" if status_val == "failed" else "yellow"
         req_summary = f"{scan.get('requests_sent', 0)} ({scan.get('requests_successful', 0)} ok)"
         dur = f"{scan.get('duration_seconds', 0.0):.1f}s"
 
         findings_count = scan.get("findings_count", 0)
         crit_count = scan.get("critical_count", 0)
         high_count = scan.get("high_count", 0)
-        if crit_count or high_count:
+        if status_val == "failed":
+            finding_summary = "[bold red]FAILED (N/A)[/bold red]"
+        elif crit_count or high_count:
             finding_summary = f"[bold red]{findings_count}[/bold red] [dim](C:{crit_count}/H:{high_count})[/dim]"
         elif findings_count > 0:
             finding_summary = f"[yellow]{findings_count}[/yellow]"
@@ -986,7 +1115,7 @@ def cmd_history(limit: int = 20) -> None:
             scan_id_short,
             scan.get("target_url", "-"),
             scan.get("profile", "safe"),
-            f"[{status_color}]{scan.get('status', '-')}[/{status_color}]",
+            f"[{status_color}]{status_val}[/{status_color}]",
             req_summary,
             finding_summary,
             dur,
@@ -1013,15 +1142,38 @@ def cmd_show(scan_id: Optional[str] = None) -> None:
         return
 
     actual_scan_id = scan["id"]
+    status_val = scan.get("status", "unknown")
+    endpoints_raw = db.get_endpoints(actual_scan_id)
     findings_raw = db.get_findings(actual_scan_id)
 
-    console.print(f"[bold cyan]Scan ID:[/bold cyan] [bold white]{actual_scan_id}[/bold white]")
-    console.print(f"[bold cyan]Target:[/bold cyan] [bold white]{scan.get('target_url')}[/bold white]")
-    console.print(f"[bold cyan]Status:[/bold cyan] {scan.get('status')}  |  [bold cyan]Duration:[/bold cyan] {scan.get('duration_seconds', 0.0):.1f}s")
-    console.print(f"[bold cyan]Findings:[/bold cyan] {len(findings_raw)}\n")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold white", width=18)
+    grid.add_column(style="cyan")
+
+    status_color = "green" if status_val == "completed" else "red" if status_val == "failed" else "yellow"
+    grid.add_row("Scan ID", actual_scan_id)
+    grid.add_row("Target", str(scan.get("target_url")))
+    grid.add_row("Profile", str(scan.get("profile", "safe")).upper())
+    grid.add_row("Assessment Status", f"[{status_color}]{status_val.upper()}[/{status_color}]")
+    grid.add_row("Duration", f"{scan.get('duration_seconds', 0.0):.1f}s")
+    grid.add_row("Endpoints Mapped", str(len(endpoints_raw)))
+    grid.add_row("Findings Synthesized", f"[yellow]{len(findings_raw)}[/yellow]" if findings_raw else "0")
+
+    panel = Panel(
+        grid,
+        title=f"[bold cyan]SCAN INVESTIGATION & EVIDENCE ({actual_scan_id[:12]})[/bold cyan]",
+        border_style="cyan",
+        padding=(1, 2),
+    )
+    console.print(panel)
+    console.print()
+
+    if status_val == "failed":
+        console.print("[bold red]Note: This scan failed during execution. Findings are not available and no security conclusion was drawn.[/bold red]\n")
+        return
 
     if not findings_raw:
-        console.print("[dim]No security findings recorded for this session.[/dim]\n")
+        console.print("[dim]No security findings were identified during this assessment session.[/dim]\n")
         return
 
     for idx, f_dict in enumerate(findings_raw, 1):
@@ -1040,6 +1192,109 @@ def cmd_show(scan_id: Optional[str] = None) -> None:
             recommendation=f_dict["recommendation"] or "",
         )
         render_finding_detail(console, finding_obj)
+
+
+def cmd_doctor() -> int:
+    """Run comprehensive self-diagnostics on VulnForge subsystems."""
+    render_banner(console, compact=True)
+    cfg = load_config()
+    checks: List[Dict[str, Any]] = []
+
+    # 1. Python Environment
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    if sys.version_info >= (3, 10):
+        checks.append({"name": "Python Environment", "status": "PASS", "details": f"Python {py_ver} (>= 3.10 required)"})
+    else:
+        checks.append({"name": "Python Environment", "status": "FAIL", "details": f"Python {py_ver} is unsupported (>= 3.10 required)"})
+
+    # 2. Core Dependencies
+    dep_failures = []
+    for mod in ["httpx", "pydantic", "rich", "typer", "bs4", "sqlite3"]:
+        try:
+            __import__(mod)
+        except ImportError:
+            dep_failures.append(mod)
+    if not dep_failures:
+        checks.append({"name": "Core Dependencies", "status": "PASS", "details": "All critical libraries loaded successfully"})
+    else:
+        checks.append({"name": "Core Dependencies", "status": "FAIL", "details": f"Missing: {', '.join(dep_failures)}"})
+
+    # 3. Database Subsystem
+    try:
+        db = DatabaseManager(cfg.database_path)
+        db.list_scans(limit=1)
+        checks.append({"name": "Database & Storage", "status": "PASS", "details": f"SQLite database operational at {cfg.database_path}"})
+    except Exception as e:
+        checks.append({"name": "Database & Storage", "status": "FAIL", "details": f"Database initialization error: {e}"})
+
+    # 4. Scanner Registry
+    scanners = ScannerRegistry.list()
+    if len(scanners) >= 8:
+        checks.append({"name": "Scanner Module Registry", "status": "PASS", "details": f"{len(scanners)} scanner modules active and registered"})
+    elif len(scanners) > 0:
+        checks.append({"name": "Scanner Module Registry", "status": "WARN", "details": f"Only {len(scanners)} scanners registered"})
+    else:
+        checks.append({"name": "Scanner Module Registry", "status": "FAIL", "details": "No scanners registered in registry"})
+
+    # 5. AttackSurface Models & Validation
+    try:
+        from vulnforge.crawler.forms import DiscoveredForm, FormField
+        from vulnforge.intelligence import AttackSurfaceBuilder
+        from vulnforge.models.endpoint import Endpoint
+        test_form = DiscoveredForm(
+            method="POST",
+            action="http://127.0.0.1/login.php",
+            source_url="http://127.0.0.1/index.php",
+            fields=[FormField(name="user", field_type="text"), FormField(name="pass", field_type="password")]
+        )
+        test_ep = Endpoint.from_url("http://127.0.0.1/index.php", method="GET", source="test")
+        surface = AttackSurfaceBuilder.build(
+            target_url="http://127.0.0.1/index.php",
+            endpoints=[test_ep],
+            parameters=[],
+            forms=[test_form],
+            javascript_assets=[],
+            technologies=[],
+        )
+        checks.append({"name": "AttackSurface & Form Models", "status": "PASS", "details": f"Schema validation intact ({len(surface.forms)} form normalized)"})
+    except Exception as e:
+        checks.append({"name": "AttackSurface & Form Models", "status": "FAIL", "details": f"AttackSurface validation error: {e}"})
+
+    # 6. Report Generation Subsystem
+    try:
+        test_scan_meta = {
+            "scan_id": "doctor-check",
+            "target": {"normalized_url": "http://127.0.0.1"},
+            "status": "completed",
+            "profile": "safe",
+            "technologies": [],
+            "statistics": {
+                "requests_sent": 0, "requests_successful": 0, "requests_failed": 0,
+                "requests_blocked": 0, "http_errors": 0, "timeouts": 0, "redirects": 0,
+                "duration_seconds": 0.0,
+            }
+        }
+        json_rep = generate_json_report(test_scan_meta, [], [], [], test_scan_meta["statistics"])
+        html_rep = generate_html_report(test_scan_meta, [], [], [], test_scan_meta["statistics"])
+        md_rep = generate_markdown_report(test_scan_meta, [], [], [], test_scan_meta["statistics"])
+        checks.append({"name": "Report Generation Engine", "status": "PASS", "details": "HTML, JSON, and Markdown renderers operational"})
+    except Exception as e:
+        checks.append({"name": "Report Generation Engine", "status": "FAIL", "details": f"Report rendering failure: {e}"})
+
+    # 7. Filesystem & Output Permissions
+    try:
+        out_dir = Path(cfg.output_directory)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        test_file = out_dir / ".doctor_write_test"
+        test_file.write_text("ok", encoding="utf-8")
+        test_file.unlink(missing_ok=True)
+        checks.append({"name": "Filesystem Permissions", "status": "PASS", "details": f"Write access confirmed in {out_dir}"})
+    except Exception as e:
+        checks.append({"name": "Filesystem Permissions", "status": "FAIL", "details": f"Cannot write to output directory: {e}"})
+
+    render_doctor_results(console, checks)
+    has_failures = any(c["status"] == "FAIL" for c in checks)
+    return 1 if has_failures else 0
 
 
 def cmd_stats(scan_id: Optional[str] = None) -> None:
@@ -1089,7 +1344,6 @@ def cmd_stats(scan_id: Optional[str] = None) -> None:
     )
     console.print(panel)
     console.print()
-
 
 
 def cmd_diff(scan_id_1: str, scan_id_2: str) -> None:
@@ -1230,7 +1484,6 @@ def cmd_regression(
     return 1 if report.has_blocking_regressions else 0
 
 
-
 def cmd_config_show() -> None:
     """Display active configuration settings."""
     cfg = load_config()
@@ -1280,6 +1533,21 @@ async def execute_surface(
 
     if not quiet:
         render_banner(console)
+        render_command_intro(
+            console=console,
+            command="ATTACK SURFACE INTELLIGENCE",
+            purpose="Build an intelligence model of the target's attack surface and prioritize test candidates.",
+            will_do=[
+                "Synthesize discovered endpoints, forms, parameters, and headers",
+                "Classify parameters into semantic categories (identifiers, auth, filenames)",
+                "Score endpoint priority based on dynamic behavior and attack surface density",
+                "Recommend targeted security analysis candidates with deterministic rationale",
+            ],
+            will_not_do=[
+                "Exploit vulnerabilities or modify server state",
+                "Submit active malicious payloads",
+            ],
+        )
 
     parsed_headers = parse_key_value_pairs(headers)
     parsed_cookies = parse_key_value_pairs(cookies)
@@ -1427,7 +1695,6 @@ async def execute_surface(
                         except Exception:
                             pass
 
-                # Fingerprint technologies from crawl pages
                 for page_url, page_data in crawl_result.page_results.items():
                     mock_resp = type("DummyResp", (), {"headers": {}, "body": page_data.raw_html})()
                     fingerprinter.analyze_response(mock_resp, meta_tags=page_data.meta_tags, scripts=page_data.scripts)
@@ -1447,16 +1714,16 @@ async def execute_surface(
             technologies=detected_techs,
         )
 
-        # Persist enriched endpoints and parameters
         db.save_endpoints(context.scan_id, surface.endpoints)
 
         # STEP 5: Render Dashboards & Tables
         if not quiet:
             render_attack_surface_summary(console, surface)
             render_endpoint_priority_table(console, surface.endpoints, limit=15)
-            render_parameter_classification_table(console, surface.parameters, limit=15)
+            render_parameter_intelligence_table(console, surface.parameters, limit=15)
             if detected_techs:
                 render_technologies_table(console, fingerprinter.get_detected())
+            console.print(f"[bold cyan]Next recommended command:[/bold cyan] [bold white]vulnforge scan {target.normalized_url}[/bold white]\n")
 
         # STEP 6: Optional Export
         if output:
@@ -1464,7 +1731,8 @@ async def execute_surface(
             out_path.parent.mkdir(parents=True, exist_ok=True)
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write(surface.model_dump_json(indent=2))
-            console.print(f"[green][+] Attack surface map exported to {out_path}[/green]")
+            if not quiet:
+                console.print(f"[green][+] Attack surface map exported to {out_path}[/green]")
 
     except KeyboardInterrupt:
         console.print("\n[bold yellow][!] Attack surface discovery interrupted safely.[/bold yellow]")

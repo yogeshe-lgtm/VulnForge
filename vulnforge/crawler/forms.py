@@ -1,41 +1,43 @@
 """HTML Form parser and parameter discovery."""
 
-from dataclasses import dataclass, field
 from typing import List, Optional
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
+from pydantic import BaseModel, Field
 
 from vulnforge.models.parameter import Parameter, ParameterLocation
 from vulnforge.utils.normalization import normalize_url
 
 
-@dataclass
-class FormField:
+class FormField(BaseModel):
     """Represents an input field inside an HTML form."""
 
-    name: str
-    field_type: str  # text, password, hidden, email, select, textarea, checkbox, etc.
-    value: Optional[str] = None
-    required: bool = False
-    options: List[str] = field(default_factory=list)
+    name: str = Field(..., description="Field name attribute")
+    field_type: str = Field(default="text", description="Input type (text, password, hidden, etc.)")
+    value: Optional[str] = Field(default=None, description="Default or extracted field value")
+    required: bool = Field(default=False, description="Whether field is required")
+    options: List[str] = Field(default_factory=list, description="Dropdown or select options if applicable")
 
 
-@dataclass
-class DiscoveredForm:
-    """Represents a discovered HTML form."""
+class DiscoveredForm(BaseModel):
+    """Represents a discovered HTML form with full input signature and attributes."""
 
-    action: str
-    method: str  # GET or POST
-    enctype: str
-    fields: List[FormField] = field(default_factory=list)
-    source_url: str = ""
-    form_name: Optional[str] = None
-    form_id: Optional[str] = None
+    action: str = Field(..., description="Form action URL target")
+    method: str = Field(default="GET", description="Form HTTP method (GET, POST, etc.)")
+    enctype: str = Field(
+        default="application/x-www-form-urlencoded",
+        description="Form encoding type",
+    )
+    fields: List[FormField] = Field(default_factory=list, description="Input fields inside form")
+    source_url: str = Field(default="", description="URL where form was discovered")
+    form_name: Optional[str] = Field(default=None, description="Form name attribute")
+    form_id: Optional[str] = Field(default=None, description="Form ID attribute")
+    source: str = Field(default="FORM", description="Discovery source tag")
 
     def to_parameters(self) -> List[Parameter]:
         """Convert form fields into Parameter model objects."""
-        loc = ParameterLocation.FORM if self.method == "POST" else ParameterLocation.QUERY
+        loc = ParameterLocation.FORM if self.method.upper() == "POST" else ParameterLocation.QUERY
         parameters: List[Parameter] = []
         for f in self.fields:
             if not f.name:
